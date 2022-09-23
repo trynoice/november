@@ -34,6 +34,7 @@
   "homepage": "https://github.com/trynoice/november",
   "devDependencies": {
     "@tsconfig/recommended": "^1.0.1",
+    "@types/av": "^0.4.1",
     "@typescript-eslint/eslint-plugin": "^5.38.0",
     "@typescript-eslint/parser": "^5.38.0",
     "eslint": "^8.23.1",
@@ -45,5 +46,9 @@
     "/dist"
   ],
   "main": "dist/index.js",
-  "types": "dist/index.d.ts"
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "av": "^0.4.1",
+    "mp3.js": "^0.2.0"
+  }
 }
