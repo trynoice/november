@@ -4,7 +4,7 @@
     "declaration": true,
     "outDir": "dist"
   },
-  "files": ["vendor/types/av/index.d.ts", "declarations.d.ts"],
+  "files": ["declarations.d.ts"],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

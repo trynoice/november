@@ -42,13 +42,12 @@
     "typescript": "^4.8.3"
   },
   "files": [
-    "/dist",
-    "/vendor"
+    "/dist"
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "av": "file:./vendor/av.js",
-    "mp3.js": "file:./vendor/mp3.js"
+    "av": "trynoice/aurora.js#dev",
+    "mp3.js": "trynoice/mp3.js#dev"
   }
 }
