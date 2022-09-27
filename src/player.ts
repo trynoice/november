@@ -1,4 +1,5 @@
 import { Asset, Format } from 'av';
+import 'mp3.js';
 
 const AudioContextImpl: typeof AudioContext =
   window.AudioContext || window.webkitAudioContext;
@@ -102,14 +103,16 @@ export class Player {
 
     const asset = Asset.fromURL(src);
     asset.on('format', (format: Format) => {
+      console.log('got audio format', format);
       this.channels = format.channelsPerFrame;
       this.sampleRate = format.sampleRate;
       this.depth = format.bitsPerChannel;
     });
 
-    asset.on('data', (chunk: Float32Array) => {
-      this.buffer.push(chunk);
-      this.bufferSize += chunk.length;
+    asset.on('data', (data: Float32Array) => {
+      console.log('got data; length', data.length);
+      this.buffer.push(new Float32Array(data));
+      this.bufferSize += data.length;
       if (this.playWhenReady && !this.isPlaying) {
         this.playNextChunk();
       }
@@ -125,7 +128,11 @@ export class Player {
       }
     });
 
-    asset.on('error', () => this.bufferNextItem());
+    asset.on('error', (e: Error) => {
+      console.error('failed to buffer item', e);
+      this.bufferNextItem();
+    });
+
     asset.start();
     this.asset = asset;
   }
