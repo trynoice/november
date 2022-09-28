@@ -9,51 +9,41 @@ export class Player {
   private readonly gainNode = this.context.createGain();
 
   private playlist: string[];
-  private asset?: Asset;
   private channels = 0;
   private sampleRate = 0;
-  private depth = 0;
-  private buffer: Float32Array[] = [];
-  private bufferSize = 0;
-  private maxBufferSize: number;
-
+  private nextChunkStartTime = this.context.currentTime;
   private playWhenReady = false;
-  private isPlaying = false;
+  private asset?: Asset;
+  private leftOverChunk?: Float32Array;
+  private bufferSizeSeconds: number;
 
-  constructor(maxBufferSize: number) {
+  constructor(bufferSizeSeconds: number) {
     this.playlist = [];
-    this.maxBufferSize = maxBufferSize;
+    this.bufferSizeSeconds = bufferSizeSeconds;
     this.gainNode.gain.value = 1.0;
     this.gainNode.connect(this.context.destination);
+    this.context.suspend();
   }
 
   public play(): void {
     this.playWhenReady = true;
-    if (this.isPlaying) {
-      return;
-    }
-
-    if (this.bufferSize > 0) {
-      this.playNextChunk();
-    } else {
+    if (this.asset == null) {
       this.bufferNextItem();
     }
+
+    this.context.resume();
   }
 
   public pause(): void {
     this.playWhenReady = false;
-    this.isPlaying = false;
     this.context.suspend();
   }
 
   public stop(): void {
-    this.context.suspend();
+    this.context.close();
     this.asset?.stop();
     this.playWhenReady = false;
-    this.isPlaying = false;
     this.asset = undefined;
-    this.buffer = [];
-    this.bufferSize = 0;
   }
 
   public setVolume(volume: number): void {
@@ -62,78 +52,107 @@ export class Player {
 
   public addMediaItem(src: string): void {
     this.playlist.push(src);
-    if (this.asset == null) {
+    if (this.playWhenReady && this.asset == null) {
       this.bufferNextItem();
     }
-  }
-
-  private playNextChunk() {
-    const chunk = this.buffer.shift();
-    if (chunk == null) {
-      this.isPlaying = false;
-      return;
-    }
-
-    this.bufferSize -= chunk.length;
-    // resume buffering if buffer size is under the given max.
-    if (this.bufferSize < this.maxBufferSize) {
-      this.asset?.start();
-    }
-
-    this.isPlaying = true;
-    const chunkBuffer = this.context.createBuffer(
-      this.channels,
-      chunk.length,
-      this.sampleRate
-    );
-
-    chunkBuffer.copyToChannel(chunk, 0);
-    const sourceNode = this.context.createBufferSource();
-    sourceNode.buffer = chunkBuffer;
-    sourceNode.connect(this.gainNode);
-    sourceNode.addEventListener('ended', () => this.playNextChunk());
-    sourceNode.start();
   }
 
   private bufferNextItem() {
     const src = this.playlist.shift();
     if (src == null) {
+      this.asset = undefined;
+      console.log('playlist is empty, nothing to buffer');
       return;
     }
 
+    console.log('start buffering next item');
     const asset = Asset.fromURL(src);
     asset.on('format', (format: Format) => {
       console.log('got audio format', format);
       this.channels = format.channelsPerFrame;
       this.sampleRate = format.sampleRate;
-      this.depth = format.bitsPerChannel;
     });
 
     asset.on('data', (data: Float32Array) => {
-      console.log('got data; length', data.length);
-      this.buffer.push(new Float32Array(data));
-      this.bufferSize += data.length;
-      if (this.playWhenReady && !this.isPlaying) {
-        this.playNextChunk();
-      }
-
-      if (asset.buffered >= 100.0 && !asset.active) {
-        this.bufferNextItem();
-        return;
-      }
-
-      if (this.bufferSize > this.maxBufferSize) {
-        // pause if buffer size exceed maxBufferSize.
+      const buffered = this.nextChunkStartTime - this.context.currentTime;
+      if (buffered >= this.bufferSizeSeconds && this.asset?.active) {
+        console.log('stop buffering audio', `buffered duration=${buffered}`);
         asset.stop();
       }
+
+      this.queueChunk(data);
     });
 
+    asset.on('end', () => this.bufferNextItem());
     asset.on('error', (e: Error) => {
-      console.error('failed to buffer item', e);
+      console.warn('failed to buffer item:', src, e);
       this.bufferNextItem();
     });
 
     asset.start();
     this.asset = asset;
+  }
+
+  private queueChunk(chunk: Float32Array) {
+    if (chunk.length < this.channels) {
+      if (this.leftOverChunk == null) {
+        this.leftOverChunk = chunk;
+      } else {
+        const tmp = this.leftOverChunk;
+        this.leftOverChunk = new Float32Array(tmp.length + chunk.length);
+        this.leftOverChunk.set(tmp, 0);
+        this.leftOverChunk.set(chunk, tmp.length);
+      }
+
+      return;
+    }
+
+    const frameCount = Math.floor(chunk.length / this.channels);
+    const audioBuffer = this.context.createBuffer(
+      this.channels,
+      frameCount,
+      this.sampleRate
+    );
+
+    for (let channel = 0; channel < this.channels; channel++) {
+      const channelData = audioBuffer.getChannelData(channel);
+      let offset = channel;
+      for (let i = 0; i < frameCount; i++) {
+        channelData[i] = chunk[offset];
+        offset += this.channels;
+      }
+    }
+
+    if (this.nextChunkStartTime < this.context.currentTime) {
+      this.nextChunkStartTime = this.context.currentTime;
+    }
+
+    const sourceNode = this.context.createBufferSource();
+    sourceNode.buffer = audioBuffer;
+    sourceNode.connect(this.gainNode);
+    sourceNode.onended = () => {
+      sourceNode.disconnect();
+      const buffered = this.nextChunkStartTime - this.context.currentTime;
+      if (buffered < this.bufferSizeSeconds / 2 && !this.asset?.active) {
+        console.log('resume buffering audio', `buffer duration=${buffered}`);
+        this.asset?.start();
+      }
+    };
+
+    sourceNode.start(this.nextChunkStartTime);
+    this.nextChunkStartTime += audioBuffer.duration;
+
+    const leftOverStart = frameCount * this.channels;
+    const leftOverCount = chunk.length - leftOverStart;
+    if (leftOverCount < 1) {
+      this.leftOverChunk = undefined;
+      return;
+    }
+
+    this.leftOverChunk = new Float32Array(leftOverCount);
+    let j = 0;
+    for (let i = leftOverStart; i < chunk.length; i++) {
+      this.leftOverChunk[j++] = chunk[i];
+    }
   }
 }
