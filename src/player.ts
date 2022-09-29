@@ -1,62 +1,96 @@
-const AudioContextImpl: typeof AudioContext =
-  window.AudioContext || window.webkitAudioContext;
-
 export class Player {
-  private readonly context: AudioContext = new AudioContextImpl();
-  private readonly gainNode = this.context.createGain();
-
-  private playlist: string[];
-  private currentAudio?: HTMLMediaElement;
-  private nextAudio?: HTMLMediaElement;
-
-  constructor() {
-    this.playlist = [];
-    this.gainNode.gain.value = 1.0;
-    this.gainNode.connect(this.context.destination);
-  }
+  private playlist: string[] = [];
+  private audioQueue: HTMLAudioElement[] = [];
+  private playWhenReady = false;
+  private volume = 1.0;
 
   public play(): void {
-    this.playNextItem();
+    this.playWhenReady = true;
+    if (this.audioQueue.length > 0) {
+      this.audioQueue[0].play();
+    } else if (this.audioQueue.length < 2) {
+      this.queueNextItem();
+    }
+  }
+
+  public pause(): void {
+    this.playWhenReady = false;
+    if (this.audioQueue.length > 0) {
+      this.audioQueue[0].pause();
+    }
+  }
+
+  public stop(): void {
+    this.playWhenReady = false;
+    if (this.audioQueue.length > 0) {
+      this.audioQueue[0].pause();
+      this.audioQueue = [];
+    }
   }
 
   public setVolume(volume: number): void {
-    this.gainNode.gain.value = volume;
+    this.volume = volume;
+    this.audioQueue.forEach((a) => (a.volume = volume));
   }
 
   public addMediaItem(src: string): void {
     this.playlist.push(src);
+    if (this.audioQueue.length < 2) {
+      this.queueNextItem();
+    }
   }
 
-  private playNextItem() {
-    this.currentAudio = this.nextAudio ?? this.buildNextAudio();
-    if (this.currentAudio == null) {
+  private queueNextItem() {
+    const mediaItemUrl = this.playlist.shift();
+    if (mediaItemUrl == null) {
+      console.log('playlist is empty');
       return;
     }
 
-    this.nextAudio = undefined;
-    const sourceNode = this.context.createMediaElementSource(this.currentAudio);
-    sourceNode.connect(this.gainNode);
-    sourceNode.addEventListener('ended', () => this.playNextItem());
-  }
-
-  private buildNextAudio(): HTMLAudioElement | undefined {
-    const mediaItemUrl = this.playlist.shift();
-    if (mediaItemUrl == null) {
-      return undefined;
-    }
-
-    const audio = new Audio(mediaItemUrl);
+    console.log('queuing', mediaItemUrl);
+    const audio = document.createElement('audio');
+    audio.src = mediaItemUrl;
+    audio.volume = this.volume;
     audio.preload = 'auto';
-    const onTimeUpdate = () => {
-      if (audio.currentTime < audio.duration - 15) {
+    const nextItemPlayer = () => {
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining > 0.35) {
         return;
       }
 
-      this.nextAudio = this.nextAudio ?? this.buildNextAudio();
-      audio.removeEventListener('timeupdate', onTimeUpdate);
+      const prevAudio = this.audioQueue.shift();
+      if (this.audioQueue.length > 0) {
+        this.audioQueue[0]
+          .play()
+          .then(() => prevAudio?.pause())
+          .catch((e) => {
+            console.warn('failed to play audio', audio.src, e);
+            this.audioQueue.shift();
+            this.queueNextItem();
+          });
+      }
+
+      console.log('transition');
+      audio.removeEventListener('timeupdate', nextItemPlayer);
     };
 
-    audio.addEventListener('timeupdate', onTimeUpdate);
-    return audio;
+    audio.addEventListener('timeupdate', nextItemPlayer);
+    const nextItemQueuer = () => {
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining < 15 && this.audioQueue.length < 2) {
+        this.queueNextItem();
+        audio.removeEventListener('timeupdate', nextItemQueuer);
+      }
+    };
+
+    audio.addEventListener('timeupdate', nextItemQueuer);
+    this.audioQueue.push(audio);
+    if (this.playWhenReady && this.audioQueue.length < 2) {
+      audio.play().catch((e) => {
+        console.warn('failed to play audio', audio.src, e);
+        this.audioQueue.shift();
+        this.queueNextItem();
+      });
+    }
   }
 }
