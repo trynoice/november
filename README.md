@@ -65,6 +65,17 @@ decode the WAV file chunk by chunk. We then used the Web Audio API to queue
 decoded PCM chunks in an `AudioContext`. When a resource finished buffering, we
 moved on to the next one in the playlist and repeated the process.
 
+### Media Source Extensions
+
+Branch: https://github.com/trynoice/november/tree/test/mse
+
+We segmented input MP3 files into several chunks, like HLS/DASH. However, MP3
+only worked with MSE in Chromium based browsers, and it didn't provide seamless
+transition from one chunk to the next.
+
+We also tried FMP4 with AAC codec. It didn't work when we wrote two different
+media items to the same source buffer.
+
 ## License
 
 [GNU GPL v3](LICENSE)
